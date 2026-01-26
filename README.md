@@ -50,6 +50,23 @@ EQ Matcher analyzes the frequency spectrum of a reference audio track and genera
     npm run tauri dev
     ```
 
+## ⚡ Performance Benchmark (Headless)
+
+If you only want to benchmark the audio pipeline (no Tauri/GUI build), you can run the Rust benchmark binary with Tauri disabled:
+
+```bash
+cd src-tauri
+mkdir -p ../bench
+curl -L -o ../bench/sample.mp3 https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3
+cargo run --release --no-default-features --bin bench -- ../bench/sample.mp3
+```
+
+To emulate the previous behavior (always resample to 48kHz), use:
+
+```bash
+cargo run --release --no-default-features --bin bench -- ../bench/sample.mp3 --preset legacy
+```
+
 ### Building for Production
 
 To create a standalone executable:
