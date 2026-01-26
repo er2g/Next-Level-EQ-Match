@@ -1,4 +1,4 @@
-pub mod loader;
 pub mod analyzer;
-pub mod profile;
+pub mod loader;
 pub mod matcher;
+pub mod profile;

@@ -3,14 +3,11 @@
     windows_subsystem = "windows"
 )]
 
-mod audio;
-mod dsp;
-
+use eq_matcher::audio::analyzer::{analyze_spectrum, AnalysisConfig};
+use eq_matcher::audio::loader::{load_audio_file, prepare_audio_for_analysis, ResamplePolicy};
+use eq_matcher::audio::matcher::{match_profiles, MatchConfig, MatchResult};
+use eq_matcher::audio::profile::{extract_eq_profile, EQProfile};
 use std::sync::Mutex;
-use audio::loader::{load_audio_file, resample_audio};
-use audio::analyzer::{analyze_spectrum, AnalysisConfig};
-use audio::profile::{extract_eq_profile, EQProfile};
-use audio::matcher::{match_profiles, MatchConfig, MatchResult};
 
 struct AppState {
     reference_profile: Mutex<Option<EQProfile>>,
@@ -19,31 +16,35 @@ struct AppState {
 }
 
 #[tauri::command]
-async fn load_reference_audio(path: String) -> Result<EQProfile, String> {
+async fn load_reference_audio(path: String, preset: Option<String>) -> Result<EQProfile, String> {
     // Load audio
-    let audio = load_audio_file(&path)
-        .map_err(|e| format!("Load error: {}", e))?;
-    
-    // Resample to standard rate if needed
+    let audio = load_audio_file(&path).map_err(|e| format!("Load error: {}", e))?;
+
+    // Resample policy:
+    // - Default: avoid unnecessary upsampling (big speed win for 44.1kHz sources).
+    // - "legacy": keep previous behavior (always resample to 48kHz).
+    // - "no-resample": never resample.
     let standard_rate = 48000;
-    let samples = if audio.sample_rate != standard_rate {
-        resample_audio(&audio.samples, audio.sample_rate, standard_rate)
-            .map_err(|e| format!("Resample error: {}", e))?
-    } else {
-        audio.samples
+    let policy = match preset.as_deref() {
+        Some("legacy") => ResamplePolicy::Always,
+        Some("no-resample") => ResamplePolicy::Never,
+        _ => ResamplePolicy::DownsampleOnly,
     };
-    
+    let (samples, analyzed_rate) =
+        prepare_audio_for_analysis(audio.samples, audio.sample_rate, standard_rate, policy)
+            .map_err(|e| format!("Resample error: {}", e))?;
+
     // Analyze
     let config = AnalysisConfig::default();
-    let spectrum = analyze_spectrum(&samples, standard_rate, &config);
+    let spectrum = analyze_spectrum(&samples, analyzed_rate, &config);
     let profile = extract_eq_profile(&spectrum, &config);
-    
+
     Ok(profile)
 }
 
 #[tauri::command]
-async fn load_input_audio(path: String) -> Result<EQProfile, String> {
-    load_reference_audio(path).await // Same process
+async fn load_input_audio(path: String, preset: Option<String>) -> Result<EQProfile, String> {
+    load_reference_audio(path, preset).await // Same process
 }
 
 #[tauri::command]
@@ -62,8 +63,9 @@ async fn export_eq_settings(
 ) -> Result<String, String> {
     match format.as_str() {
         "reaper" => export_as_reaper_preset(&result.correction_profile),
-        "json" => serde_json::to_string_pretty(&result.correction_profile)
-            .map_err(|e| e.to_string()),
+        "json" => {
+            serde_json::to_string_pretty(&result.correction_profile).map_err(|e| e.to_string())
+        }
         "txt" => export_as_text(&result.correction_profile),
         _ => Err("Unknown format".to_string()),
     }
@@ -76,42 +78,42 @@ fn export_as_reaper_preset(profile: &EQProfile) -> Result<String, String> {
     output.push_str("LASTSEL 0\n");
     output.push_str("DOCKED 0\n");
     output.push_str("<VST \"VST: ReaEQ (Cockos)\" ReaEQ.vst.dylib 0 \"\" 1919247729\n");
-    
+
     // ReaEQ bands
     for (i, band) in profile.bands.iter().enumerate().take(10) {
         let base_param = i * 5;
-        
+
         // Enable band
         output.push_str(&format!("  {} 1.0\n", base_param));
-        
+
         // Frequency (normalized 0-1)
-        let freq_norm = (band.frequency.log2() - 20.0f32.log2()) / 
-                        (20000.0f32.log2() - 20.0f32.log2());
+        let freq_norm =
+            (band.frequency.log2() - 20.0f32.log2()) / (20000.0f32.log2() - 20.0f32.log2());
         output.push_str(&format!("  {} {}\n", base_param + 1, freq_norm));
-        
+
         // Gain (normalized, ±18dB range)
         let gain_norm = (band.gain_db + 18.0) / 36.0;
         output.push_str(&format!("  {} {}\n", base_param + 2, gain_norm));
-        
+
         // Q
         output.push_str(&format!("  {} 0.5\n", base_param + 3));
-        
+
         // Type (Bell)
         output.push_str(&format!("  {} 0.4\n", base_param + 4));
     }
-    
+
     output.push_str(">\n");
     output.push_str("FLOATPOS 0 0 0 0\n");
     output.push_str("FXID {GUID}\n");
     output.push_str("WAK 0 0\n");
     output.push_str(">\n");
-    
+
     Ok(output)
 }
 
 fn export_as_text(profile: &EQProfile) -> Result<String, String> {
     let mut output = String::from("EQ Settings:\n\n");
-    
+
     for band in &profile.bands {
         output.push_str(&format!(
             "{:>6} Hz: {:>+6.2} dB (Q: {:.2})\n",
@@ -120,7 +122,7 @@ fn export_as_text(profile: &EQProfile) -> Result<String, String> {
             calculate_q_from_bandwidth(band.frequency, band.bandwidth)
         ));
     }
-    
+
     Ok(output)
 }
 

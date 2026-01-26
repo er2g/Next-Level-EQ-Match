@@ -3,8 +3,21 @@ name = "eq-matcher"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["app"]
+app = ["tauri", "tauri-build"]
+
+[[bin]]
+name = "eq-matcher"
+path = "src/main.rs"
+required-features = ["app"]
+
+[[bin]]
+name = "bench"
+path = "src/bin/bench.rs"
+
 [dependencies]
-tauri = { version = "1.5", features = ["dialog-open"] }
+tauri = { version = "1.5", features = ["dialog-open"], optional = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "1.0"
@@ -29,4 +42,4 @@ rayon = "1.8"   # Parallel processing
 once_cell = "1.19"
 
 [build-dependencies]
-tauri-build = { version = "1.5", features = [] }
+tauri-build = { version = "1.5", features = [], optional = true }
